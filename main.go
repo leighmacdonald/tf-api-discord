@@ -24,6 +24,8 @@ func run() error {
 	}
 	defer bot.Close()
 
+	registerCommands(bot)
+
 	if errStart := bot.Start(ctx); errStart != nil {
 		return errStart
 	}
