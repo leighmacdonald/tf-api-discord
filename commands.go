@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/leighmacdonald/steamid/v4/steamid"
 	"github.com/leighmacdonalf/tf-api-discord/discord"
+	"github.com/leighmacdonalf/tf-api-discord/tfapi"
 )
 
-func registerCommands(bot *discord.Bot) {
+func registerCommands(bot *discord.Bot, api *tfapi.TFAPI) {
 	defaultCtx := &[]discordgo.InteractionContextType{discordgo.InteractionContextBotDM}
 	//modPerms := int(discordgo.PermissionBanMembers)
 	userPerms := int64(discordgo.PermissionViewChannel)
 
-	bot.MustRegisterHandler("check", onCheck, &discordgo.ApplicationCommand{
+	bot.MustRegisterHandler("check", onCheck(api), &discordgo.ApplicationCommand{
 		Name:                     "check",
 		Description:              "High level summary about a player",
 		Contexts:                 defaultCtx,
@@ -27,42 +31,106 @@ func registerCommands(bot *discord.Bot) {
 			},
 		},
 	})
+
+	bot.MustRegisterHandler("stats", onStats(api), &discordgo.ApplicationCommand{
+		Name:                     "stats",
+		Description:              "Stats about the underlying database",
+		Contexts:                 defaultCtx,
+		DefaultMemberPermissions: &userPerms,
+	})
 }
 
-func onCheck(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
-	opts := OptionMap(interaction.ApplicationCommandData().Options)
+func onStats(api *tfapi.TFAPI) discord.Handler {
+	return func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
+		resp, errResp := api.StatsIdWithResponse(ctx)
+		if errResp != nil {
+			return nil, errResp
+		}
 
-	playerID, errPlayerID := steamid.Resolve(ctx, opts.String("steamid"))
-	if errPlayerID != nil || !playerID.Valid() {
-		return nil, steamid.ErrInvalidSID
+		stats := *resp.JSON200
+
+		embed := &discordgo.MessageEmbed{
+			//Type: discordgo.EmbedTypeArticle,
+			Title: "[Stats] Overall",
+			Provider: &discordgo.MessageEmbedProvider{
+				URL:  "https://tf-api.roto.lol",
+				Name: "tf-api",
+			},
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+
+		addFieldInline(embed, "Ban Total Count", strconv.Itoa(int(stats.BanTotalCount)))
+		addFieldInline(embed, "Bot Detector Lists", strconv.Itoa(int(stats.BdListCount)))
+		addFieldInline(embed, "Bot Detector Entries", strconv.Itoa(int(stats.BdListEntriesCount)))
+
+		addFieldInline(embed, "Vac Counts", strconv.Itoa(int(stats.VacCount)))
+		addFieldInline(embed, "Game Ban Counts", strconv.Itoa(int(stats.GameBanCount)))
+		addFieldInline(embed, "Comm Ban Counts", strconv.Itoa(int(stats.CommunityBanCount)))
+
+		addFieldInline(embed, "LogsTF Logs", strconv.Itoa(int(stats.LogsTfCount)))
+		addFieldInline(embed, "LogsTF Players", strconv.Itoa(int(stats.LogsTfPlayerCount)))
+		addFieldInline(embed, "LogsTF Messages", strconv.Itoa(int(stats.LogsTfChatCount)))
+
+		addFieldInline(embed, "Sources (Sourcebans)", strconv.Itoa(int(stats.SourceCount)))
+		addFieldInline(embed, "Sources (Leagues)", strconv.Itoa(int(stats.LeaguesCount)))
+		addFieldInline(embed, "League Teams", strconv.Itoa(int(stats.LeaguesTeamCount)))
+
+		addFieldInline(embed, "Names", strconv.Itoa(int(stats.NameCount)))
+		addFieldInline(embed, "Avatars", strconv.Itoa(int(stats.AvatarCount)))
+		addFieldInline(embed, "Friends", strconv.Itoa(int(stats.FriendCount)))
+
+		return embed, nil
 	}
-
-	return &discordgo.MessageEmbed{Description: "hi: " + playerID.String()}, nil
 }
 
-type CommandOptions map[string]*discordgo.ApplicationCommandInteractionDataOption
+func onCheck(api *tfapi.TFAPI) discord.Handler {
+	return func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
+		opts := discord.OptionMap(interaction.ApplicationCommandData().Options)
 
-// OptionMap will take the recursive discord slash commands and flatten them into a simple
-// map.
-func OptionMap(options []*discordgo.ApplicationCommandInteractionDataOption) CommandOptions {
-	optionM := make(CommandOptions, len(options))
-	for _, opt := range options {
-		optionM[opt.Name] = opt
+		playerID, errPlayerID := steamid.Resolve(ctx, opts.String("steamid"))
+		if errPlayerID != nil || !playerID.Valid() {
+			return nil, steamid.ErrInvalidSID
+		}
+
+		resp, errResp := api.MetaProfileWithResponse(ctx, &tfapi.MetaProfileParams{
+			Steamids: playerID.String(),
+		})
+		if errResp != nil {
+			return nil, errResp
+		}
+
+		profiles := *resp.JSON200
+		if len(profiles) != 1 {
+			return nil, fmt.Errorf("%w: Invalid response count", discord.ErrCommandExec)
+		}
+		profile := profiles[0]
+
+		embed := &discordgo.MessageEmbed{
+			URL: "https://steamcommunity.com/profiles/" + profile.SteamId,
+			//Type: discordgo.EmbedTypeArticle,
+			Title: "[Check] " + profile.PersonaName,
+			Thumbnail: &discordgo.MessageEmbedThumbnail{
+				URL:    NewAvatar(profile.AvatarHash).Medium(),
+				Width:  64,
+				Height: 64,
+			},
+			Provider: &discordgo.MessageEmbedProvider{
+				URL:  "https://tf-api.roto.lol",
+				Name: "tf-api",
+			},
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+
+		addFieldInline(embed, "SteamID", profile.SteamId)
+		addFieldInline(embed, "Name", profile.PersonaName)
+		addFieldInline(embed, "Real Name", profile.RealName)
+		addFieldInline(embed, "Account Created", time.Unix(profile.TimeCreated, 0).Format(time.DateOnly))
+		addFieldInline(embed, "Community Ban", strconv.FormatBool(profile.CommunityBanned))
+		addFieldInline(embed, "Econ Ban", profile.EconomyBan)
+		addFieldInline(embed, "Vac Bans", strconv.Itoa(int(profile.NumberOfVacBans)))
+		addFieldInline(embed, "Sourcebans", strconv.Itoa(len(profile.Bans)))
+		addFieldInline(embed, "Comp Teams", strconv.Itoa(len(profile.CompetitiveTeams)))
+
+		return embed, nil
 	}
-
-	return optionM
-}
-
-func (opts CommandOptions) String(key string) string {
-	root, found := opts[key]
-	if !found {
-		return ""
-	}
-
-	val, ok := root.Value.(string)
-	if !ok {
-		return ""
-	}
-
-	return val
 }

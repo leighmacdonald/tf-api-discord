@@ -17,6 +17,7 @@ var (
 	ErrCommandInvalid = errors.New("command invalid")
 	ErrSession        = errors.New("failed to start session")
 	ErrCommandSend    = errors.New("failed to send response")
+	ErrCommandExec    = errors.New("could not complete command")
 )
 
 type Handler func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error)
@@ -171,7 +172,7 @@ func (b *Bot) sendInteractionResponse(session *discordgo.Session, interaction *d
 
 	if errResponseErr != nil {
 		if _, errResp := session.FollowupMessageCreate(interaction, true, &discordgo.WebhookParams{
-			Content: "Something went wrong",
+			Content: "Something went wrong: " + errResponseErr.Error(),
 		}); errResp != nil {
 			return errors.Join(errResp, ErrCommandSend)
 		}
@@ -191,13 +192,8 @@ func (b *Bot) onConnect(_ *discordgo.Session, _ *discordgo.Connect) {
 }
 
 func (b *Bot) overwriteCommands() error {
-	var slashCommands []*discordgo.ApplicationCommand
-	for _, cmd := range b.commands {
-		slashCommands = append(slashCommands, cmd)
-	}
-
 	// When guildID is empty, it registers the commands globally instead of per guild.
-	commands, errBulk := b.session.ApplicationCommandBulkOverwrite(b.appID, b.guildID, slashCommands)
+	commands, errBulk := b.session.ApplicationCommandBulkOverwrite(b.appID, b.guildID, b.commands)
 	if errBulk != nil {
 		return errors.Join(errBulk, ErrCommandInvalid)
 	}
@@ -205,4 +201,31 @@ func (b *Bot) overwriteCommands() error {
 	b.registeredCommands = commands
 
 	return nil
+}
+
+type CommandOptions map[string]*discordgo.ApplicationCommandInteractionDataOption
+
+// OptionMap will take the recursive discord slash commands and flatten them into a simple
+// map.
+func OptionMap(options []*discordgo.ApplicationCommandInteractionDataOption) CommandOptions {
+	optionM := make(CommandOptions, len(options))
+	for _, opt := range options {
+		optionM[opt.Name] = opt
+	}
+
+	return optionM
+}
+
+func (opts CommandOptions) String(key string) string {
+	root, found := opts[key]
+	if !found {
+		return ""
+	}
+
+	val, ok := root.Value.(string)
+	if !ok {
+		return ""
+	}
+
+	return val
 }
