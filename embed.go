@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -49,4 +50,22 @@ func addFieldInline(embed *discordgo.MessageEmbed, name string, value string) {
 		Value:  value,
 		Inline: true,
 	})
+}
+
+func newEmbed(title string) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		//URL: "https://steamcommunity.com/profiles/" + profile.SteamId,
+		//Type: discordgo.EmbedTypeArticle,
+		Title: title,
+		// Thumbnail: &discordgo.MessageEmbedThumbnail{
+		// 	URL:    NewAvatar(profile.AvatarHash).Medium(),
+		// 	Width:  64,
+		// 	Height: 64,
+		// },
+		Provider: &discordgo.MessageEmbedProvider{
+			URL:  "https://tf-api.roto.lol",
+			Name: "tf-api",
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
 }

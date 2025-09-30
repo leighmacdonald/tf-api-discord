@@ -7,17 +7,30 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/leighmacdonald/discordgo-lipstick/bot"
 	"github.com/leighmacdonald/steamid/v4/steamid"
-	"github.com/leighmacdonalf/tf-api-discord/discord"
-	"github.com/leighmacdonalf/tf-api-discord/tfapi"
+	"github.com/leighmacdonald/tf-api-discord/tfapi"
 )
 
-func registerCommands(bot *discord.Bot, api *tfapi.TFAPI) {
+func registerCommands(ctx context.Context, discord *bot.Bot, api *tfapi.TFAPI) error {
+	sites, err := api.MetaSitesWithResponse(ctx)
+	if err != nil {
+		return err
+	}
+
+	var siteNames []*discordgo.ApplicationCommandOptionChoice
+	for _, site := range *sites.JSON200 {
+		siteNames = append(siteNames, &discordgo.ApplicationCommandOptionChoice{
+			Name:  site.Title,
+			Value: site.Name,
+		})
+	}
+
 	defaultCtx := &[]discordgo.InteractionContextType{discordgo.InteractionContextBotDM}
 	//modPerms := int(discordgo.PermissionBanMembers)
 	userPerms := int64(discordgo.PermissionViewChannel)
 
-	bot.MustRegisterHandler("check", onCheck(api), &discordgo.ApplicationCommand{
+	discord.MustRegisterHandler("check", &discordgo.ApplicationCommand{
 		Name:                     "check",
 		Description:              "High level summary about a player",
 		Contexts:                 defaultCtx,
@@ -30,17 +43,41 @@ func registerCommands(bot *discord.Bot, api *tfapi.TFAPI) {
 				Required:    true,
 			},
 		},
-	})
+	}, onCheck(api))
 
-	bot.MustRegisterHandler("stats", onStats(api), &discordgo.ApplicationCommand{
+	discord.MustRegisterHandler("bans", &discordgo.ApplicationCommand{
+		Name:                     "bans",
+		Description:              "High level summary about a player",
+		Contexts:                 defaultCtx,
+		DefaultMemberPermissions: &userPerms,
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Name:        "steamid",
+				Description: "SteamID/Profile URL",
+				Type:        discordgo.ApplicationCommandOptionString,
+				Required:    true,
+			},
+			{
+				Name:        "site",
+				Description: "Limit results to a specific site",
+				Type:        discordgo.ApplicationCommandOptionString,
+				Choices:     siteNames,
+				Required:    false,
+			},
+		},
+	}, onBans(api))
+
+	discord.MustRegisterHandler("stats", &discordgo.ApplicationCommand{
 		Name:                     "stats",
 		Description:              "Stats about the underlying database",
 		Contexts:                 defaultCtx,
 		DefaultMemberPermissions: &userPerms,
-	})
+	}, onStats(api))
+
+	return nil
 }
 
-func onStats(api *tfapi.TFAPI) discord.Handler {
+func onStats(api *tfapi.TFAPI) bot.Handler {
 	return func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
 		resp, errResp := api.StatsIdWithResponse(ctx)
 		if errResp != nil {
@@ -83,9 +120,9 @@ func onStats(api *tfapi.TFAPI) discord.Handler {
 	}
 }
 
-func onCheck(api *tfapi.TFAPI) discord.Handler {
+func onCheck(api *tfapi.TFAPI) bot.Handler {
 	return func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
-		opts := discord.OptionMap(interaction.ApplicationCommandData().Options)
+		opts := bot.OptionMap(interaction.ApplicationCommandData().Options)
 
 		playerID, errPlayerID := steamid.Resolve(ctx, opts.String("steamid"))
 		if errPlayerID != nil || !playerID.Valid() {
@@ -101,7 +138,7 @@ func onCheck(api *tfapi.TFAPI) discord.Handler {
 
 		profiles := *resp.JSON200
 		if len(profiles) != 1 {
-			return nil, fmt.Errorf("%w: Invalid response count", discord.ErrCommandExec)
+			return nil, fmt.Errorf("%w: Invalid response count", bot.ErrCommandExec)
 		}
 		profile := profiles[0]
 
@@ -130,6 +167,32 @@ func onCheck(api *tfapi.TFAPI) discord.Handler {
 		addFieldInline(embed, "Vac Bans", strconv.Itoa(int(profile.NumberOfVacBans)))
 		addFieldInline(embed, "Sourcebans", strconv.Itoa(len(profile.Bans)))
 		addFieldInline(embed, "Comp Teams", strconv.Itoa(len(profile.CompetitiveTeams)))
+
+		return embed, nil
+	}
+}
+
+func onBans(api *tfapi.TFAPI) bot.Handler {
+	return func(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) (*discordgo.MessageEmbed, error) {
+		opts := bot.OptionMap(interaction.ApplicationCommandData().Options)
+
+		playerID, errPlayerID := steamid.Resolve(ctx, opts.String("steamid"))
+		if errPlayerID != nil || !playerID.Valid() {
+			return nil, steamid.ErrInvalidSID
+		}
+
+		resp, errResp := api.BansSearchWithResponse(ctx, &tfapi.BansSearchParams{Steamids: playerID.String()})
+		if errResp != nil {
+			return nil, errResp
+		}
+
+		bans := *resp.JSON200
+		if len(bans) != 11 {
+			return nil, fmt.Errorf("%w: Invalid response count", bot.ErrCommandExec)
+		}
+
+		embed := newEmbed("[Bans] History")
+		embed.URL = "https://steamcommunity.com/profiles/" + playerID.String()
 
 		return embed, nil
 	}

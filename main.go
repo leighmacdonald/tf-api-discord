@@ -9,8 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/leighmacdonalf/tf-api-discord/discord"
-	"github.com/leighmacdonalf/tf-api-discord/tfapi"
+	_ "github.com/joho/godotenv/autoload"
+	"github.com/leighmacdonald/discordgo-lipstick/bot"
+	"github.com/leighmacdonald/tf-api-discord/tfapi"
 )
 
 func run() error {
@@ -22,17 +23,20 @@ func run() error {
 		return errAPI
 	}
 
-	bot, errBot := discord.New(discord.Opts{
-		Token:   os.Getenv("DISCORD_TOKEN"),
-		AppID:   os.Getenv("DISCORD_APP_ID"),
-		GuildID: os.Getenv("DISCORD_GUILD_ID"),
+	bot, errBot := bot.New(bot.Opts{
+		Token:     os.Getenv("DISCORD_TOKEN"),
+		AppID:     os.Getenv("DISCORD_APP_ID"),
+		GuildID:   os.Getenv("DISCORD_GUILD_ID"),
+		UserAgent: "tf-api-discord (https://github.com/leighmacdonald/tf-api-discord)",
 	})
 	if errBot != nil {
 		return errBot
 	}
 	defer bot.Close()
 
-	registerCommands(bot, api)
+	if errRegister := registerCommands(ctx, bot, api); errRegister != nil {
+		return errRegister
+	}
 
 	if errStart := bot.Start(ctx); errStart != nil {
 		return errStart
